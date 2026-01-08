@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // zig-opa-wasm policy engine
+  "policy": {
+    "enabled": true,
+    "mode": "enforce",      // "enforce" = block, "audit" = log only
+    "sources": [
+      "builtin:default",
+      ".opencode/policies/" // custom policies
+    ],
+    "on_error": "deny",     // "deny" | "allow" | "ask"
+    "audit": {
+      "enabled": true,
+      "path": ".opencode/audit.jsonl"
+    }
+  }
+}

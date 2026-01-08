@@ -34,6 +34,7 @@ import path from "path"
 import { Global } from "./global"
 import { JsonMigration } from "./storage/json-migration"
 import { Database } from "./storage/db"
+import { PolicyCommand } from "./cli/cmd/policy"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -145,6 +146,7 @@ let cli = yargs(hideBin(process.argv))
   .command(PrCommand)
   .command(SessionCommand)
   .command(DbCommand)
+  .command(PolicyCommand)
 
 if (Installation.isLocal()) {
   cli = cli.command(WorkspaceServeCommand)

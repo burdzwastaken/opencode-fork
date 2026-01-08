@@ -691,6 +691,48 @@ export namespace Config {
     })
   export type Permission = z.infer<typeof Permission>
 
+  export const PolicyAuditConfig = z
+    .object({
+      enabled: z.boolean().default(true).describe("Enable audit logging for policy decisions"),
+      path: z.string().default(".opencode/audit.jsonl").describe("Path to audit log file"),
+      retention_days: z.number().default(30).describe("Days to retain audit logs"),
+      include_input: z.boolean().default(false).describe("Include full policy input in audit logs (privacy consideration)"),
+    })
+    .meta({ ref: "PolicyAuditConfig" })
+  export type PolicyAuditConfig = z.infer<typeof PolicyAuditConfig>
+
+  export const PolicyCacheConfig = z
+    .object({
+      enabled: z.boolean().default(true).describe("Enable caching of policy decisions"),
+      ttl_seconds: z.number().default(60).describe("Cache TTL in seconds"),
+      max_entries: z.number().default(1000).describe("Maximum cache entries"),
+    })
+    .meta({ ref: "PolicyCacheConfig" })
+  export type PolicyCacheConfig = z.infer<typeof PolicyCacheConfig>
+
+  export const PolicyConfig = z
+    .object({
+      enabled: z.boolean().default(true).describe("Enable OPA policy engine"),
+      mode: z.enum(["enforce", "audit"]).default("enforce").describe("Policy mode: enforce blocks violations, audit only logs"),
+      policyName: z.string().default("opencode").describe("Name of the primary policy bundle"),
+      sources: z
+        .string()
+        .array()
+        .default(["builtin:default", "~/.config/opencode/policies/", ".opencode/policies/"])
+        .describe("Policy sources in order of precedence"),
+      bundle: z.string().optional().describe("Path to OPA bundle file"),
+      data: z.record(z.string(), z.unknown()).optional().describe("External data to inject into policy evaluation"),
+      audit: PolicyAuditConfig.optional().describe("Audit logging configuration"),
+      on_error: z.enum(["deny", "allow", "ask"]).default("deny").describe("Action when policy evaluation fails"),
+      fallback: z.enum(["legacy", "allow", "deny", "ask"]).default("legacy").describe("Fallback when policy defers"),
+      debug: z.boolean().default(false).describe("Enable policy debug logging"),
+      dry_run: z.boolean().default(false).describe("Log policy decisions without enforcing"),
+      disable: z.string().array().optional().describe("Disable specific policy sources"),
+      cache: PolicyCacheConfig.optional().describe("Policy decision caching"),
+    })
+    .meta({ ref: "PolicyConfig" })
+  export type PolicyConfig = z.infer<typeof PolicyConfig>
+
   export const Command = z.object({
     template: z.string(),
     description: z.string().optional(),
@@ -1188,6 +1230,7 @@ export namespace Config {
       instructions: z.array(z.string()).optional().describe("Additional instruction files or patterns to include"),
       layout: Layout.optional().describe("@deprecated Always uses stretch layout."),
       permission: Permission.optional(),
+      policy: PolicyConfig.optional().describe("OPA policy engine configuration for advanced permission control"),
       tools: z.record(z.string(), z.boolean()).optional(),
       enterprise: z
         .object({

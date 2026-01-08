@@ -3,6 +3,8 @@ import { BusEvent } from "@/bus/bus-event"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
+// lazy-imported to break circular dep: permission -> policy -> session -> permission
+type PolicyModule = typeof import("@/policy")
 import { ProjectID } from "@/project/schema"
 import { Instance } from "@/project/instance"
 import { MessageID, SessionID } from "@/session/schema"
@@ -135,6 +137,68 @@ export namespace Permission {
     return evalRule(permission, pattern, ...rulesets)
   }
 
+  async function evaluatePolicy(input: {
+    permission: string
+    pattern: string
+    sessionID: string
+    metadata: Record<string, unknown>
+  }) {
+    const { Policy, PolicyInput, PolicyAudit } = (await import("@/policy")) as PolicyModule
+    const config = await Config.get()
+
+    if (!config.policy?.enabled) return null
+
+    const init = await Policy.isInitialized()
+    if (!init) {
+      log.debug("policy engine not initialized, deferring to rules")
+      return null
+    }
+
+    const start = performance.now()
+
+    const pi = await PolicyInput.build({
+      permission: input.permission,
+      pattern: input.pattern,
+      sessionID: input.sessionID,
+      metadata: input.metadata,
+    })
+
+    const name = input.permission
+    const entrypoint = `opencode/permissions/${input.permission}/result`
+
+    try {
+      const decision = await Policy.evaluate(name, entrypoint, pi)
+      const duration = performance.now() - start
+
+      if (config.policy?.audit?.enabled !== false) {
+        await PolicyAudit.write(pi, decision, duration, name).catch((err: unknown) => {
+          log.warn("failed to write audit log", { error: err })
+        })
+      }
+
+      if (decision.defer) return null
+
+      if (config.policy?.dry_run) {
+        log.info("policy decision (dry run)", { decision, permission: input.permission, pattern: input.pattern })
+        return null
+      }
+
+      if (config.policy?.mode === "audit" && decision.deny) {
+        log.info("policy would deny (audit mode)", { decision, permission: input.permission, pattern: input.pattern })
+        return null
+      }
+
+      return decision
+    } catch (err) {
+      const msg = String(err)
+      if (msg.includes("not found") || msg.includes("NOT_FOUND")) {
+        log.debug("no policy for permission", { permission: input.permission })
+        return null
+      }
+      throw err
+    }
+  }
+
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Permission") {}
 
   export const layer = Layer.effect(
@@ -169,6 +233,8 @@ export namespace Permission {
         let needsAsk = false
 
         for (const pattern of request.patterns) {
+
+          // Rule-based evaluation (existing logic)
           const rule = evaluate(request.permission, pattern, ruleset, approved)
           log.info("evaluated", { permission: request.permission, pattern, action: rule })
           if (rule.action === "deny") {
@@ -308,7 +374,42 @@ export namespace Permission {
 
   export const runPromise = makeRunPromise(Service, layer)
 
+  // sync flag set during bootstrap when policy is enabled
+  let policyEnabled = false
+  export function setPolicyEnabled(v: boolean) {
+    policyEnabled = v
+  }
+
   export async function ask(input: z.infer<typeof AskInput>) {
+    // OPA policy evaluation runs before the Effect to avoid breaking sync flow
+    // Fast sync check: skip entirely when policy is not enabled
+    if (policyEnabled) {
+      try {
+        for (const pattern of input.patterns) {
+          const decision = await evaluatePolicy({
+            permission: input.permission,
+            pattern,
+            sessionID: input.sessionID as string,
+            metadata: input.metadata ?? {},
+          })
+          if (decision) {
+            if (decision.deny || (decision.reasons && decision.reasons.length > 0)) {
+              log.info("policy denied", { permission: input.permission, pattern, reasons: decision.reasons })
+              throw new DeniedError({
+                ruleset: [{ permission: input.permission, pattern, action: "deny" as const }],
+              })
+            }
+            if (decision.allow) {
+              log.info("policy allowed", { permission: input.permission, pattern })
+              return
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof DeniedError) throw err
+        log.warn("policy evaluation failed", { error: err })
+      }
+    }
     return runPromise((s) => s.ask(input))
   }
 
